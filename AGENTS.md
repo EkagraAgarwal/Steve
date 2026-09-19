@@ -17,6 +17,7 @@
 - Quickstart ships `install.sh`; runs: `dimos --replay run unitree-go2`, `dimos --simulation run unitree-go2`, `dimos run unitree-go2` (+ `ROBOT_IP`, verified env name).
 - Go2: stock Pro/Air firmware 1.1.7+, WebRTC, no jailbreak. Ping <10ms before hardware; keep obstacle avoidance enabled.
 - Incoming `dimos/` file in this repo is a patch/reference for teleop semantics, not the installed `/home/ekagr/dimos` checkout unless explicitly copied/upstreamed.
+- WSLg pygame must use the patch's subprocess path (`_is_wsl`); the old installed worker-thread implementation opens a blank `[WARN:COPY MODE]` window. Copy only `dimos/robot/unitree/keyboard_teleop.py` into `/home/ekagr/dimos` when explicitly updating the local install, then compile it. Run hardware teleop in one foreground terminal only; detached/duplicate coordinators can hide the window. Current `GO2Connection` auto-stands on start and calls `liedown()` on stop. Full commands and recovery: `instructions.md`.
 
 ## Speech / routing contracts (verified 2026-09-19; recheck current docs before use)
 

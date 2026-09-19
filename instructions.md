@@ -72,6 +72,18 @@ Require 0% loss and consistently less than 10 ms latency. Observed tests had lar
 
 This must not contact the physical robot:
 
+First install the repository's WSLg-compatible teleop patch into the separate dimOS checkout:
+
+```bash
+dimos stop
+cp /mnt/d/Steve/dimos/robot/unitree/keyboard_teleop.py \
+  ~/dimos/dimos/robot/unitree/keyboard_teleop.py
+~/dimos/.venv/bin/python -m py_compile \
+  ~/dimos/dimos/robot/unitree/keyboard_teleop.py
+```
+
+The patch detects WSL and runs pygame in a dedicated child process whose main thread owns the window. This avoids the blank `[WARN:COPY MODE]` placeholder produced when WSLg creates pygame from a dimOS worker thread. The same subprocess path remains active on macOS.
+
 ```bash
 cd ~/dimos
 source .venv/bin/activate
@@ -80,7 +92,7 @@ dimos --simulation run unitree-go2-webrtc-keyboard-teleop
 
 Click the Keyboard Teleop window before pressing keys. The window has to own keyboard focus.
 
-The simulation and teleop windows opened successfully under WSLg. Keyboard input appeared in the teleop window, but simulated motion was not yet verified; logs showed `JointVelocityTask` update timeouts. Do not treat the simulation path as validated until the simulated Go2 visibly moves.
+The patched isolated WSLg window worker rendered, stayed alive, emitted inactive zero events, and stopped cleanly. The full simulation and teleop windows opened under WSLg, but simulated motion was not yet verified; logs showed `JointVelocityTask` update timeouts. Do not treat the simulation path as validated until the simulated Go2 visibly moves.
 
 ## Physical Go2 WASD
 
@@ -113,6 +125,12 @@ dimos --transport lcm --viewer none --obstacle-avoidance run unitree-go2-webrtc-
 ```
 
 Do not launch hardware teleop through a detached automation process. A detached run can hide the pygame window, evade `dimos status`, collide with a second coordinator, and be killed by an execution timeout.
+
+If the window is blank or titled `[WARN:COPY MODE]`, stop dimOS, repeat the patch copy/compile step above, and start one foreground session again. Confirm the installed file contains `_is_wsl`:
+
+```bash
+grep -n "_is_wsl" ~/dimos/dimos/robot/unitree/keyboard_teleop.py
+```
 
 ## Teleop controls
 

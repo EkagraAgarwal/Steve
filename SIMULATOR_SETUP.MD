@@ -1,5 +1,7 @@
 # Unitree Go2 MuJoCo Simulation + WASD Keyboard Teleop (macOS)
 
+WSL2/WSLg users should follow `instructions.md` instead. The repository teleop patch detects WSL and moves pygame to a dedicated child-process main thread; without that patch, WSLg can show a blank `[WARN:COPY MODE]` window.
+
 How to reproduce, exactly, the local setup that's currently working: the full
 Go2 "smart" navigation blueprint running against a simulated robot in
 MuJoCo, driven by a WASD keyboard window. No physical robot needed.

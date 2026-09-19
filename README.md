@@ -26,6 +26,7 @@ Notes:
 - `NOW` boxes exist as code (`steve_router/commands.py`, `steve_router/router.py`, `tests/`). `LATER` boxes are not started.
 - Voice path is committed transcript events only; partial transcripts never route or actuate.
 - Incoming `dimos/robot/unitree/keyboard_teleop.py` is a reference patch for teleop semantics (motion signs/bounds); it is not the installed dimOS checkout.
+- The patch also runs the pygame window in a dedicated subprocess on macOS and WSLg, avoiding WSL's blank `[WARN:COPY MODE]` worker-thread window. Copy it into the separate dimOS checkout explicitly; see `instructions.md`.
 
 ## Why JEV
 
@@ -94,6 +95,10 @@ python -m unittest discover -s tests -v
 ```
 
 Pure stdlib tests with a fake JEV client: no network, no key, no hardware.
+
+## Go2 operations
+
+See `instructions.md` for WSL GPU setup, WiFi/STA and AES handling, installing the WSLg teleop patch, simulation, foreground hardware WASD, automatic stand/lie-down behavior, and duplicate-coordinator recovery. Never commit robot or WiFi secrets.
 
 ## Environment
 

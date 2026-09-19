@@ -21,10 +21,10 @@ import threading
 from typing import Any
 
 # Must be set before `import pygame`: otherwise pygame prints a "Hello from
-# the pygame community" banner to stdout on import. On macOS the teleop
-# window runs as a child process whose stdout is a JSON event stream read
-# by the parent (see _USE_SUBPROCESS_WINDOW below) — that banner would land
-# in the stream as a non-JSON line.
+# the pygame community" banner to stdout on import. On macOS/WSLg the
+# teleop window runs as a child process whose stdout is a JSON event
+# stream read by the parent (see _USE_SUBPROCESS_WINDOW below) -- that
+# banner would land in the stream as a non-JSON line.
 os.environ.setdefault("PYGAME_HIDE_SUPPORT_PROMPT", "1")
 
 import pygame
@@ -52,20 +52,53 @@ logger = setup_logger()
 if sys.platform.startswith("linux"):
     os.environ["SDL_VIDEODRIVER"] = "x11"
 
-# macOS requires Cocoa windows to be created on the process's real main thread
-# (SDL2's Cocoa backend calls NSApplication.setMainMenu, which raises
-# NSInternalInconsistencyException off-thread). Running the window in a
-# background thread of the worker process (as done below for other
-# platforms) crashes on macOS, so there we run it in a dedicated child
-# process instead — that process's own main thread is free for pygame,
-# mirroring how mujoco_connection.py uses `mjpython` for the same reason.
+# macOS requires Cocoa windows to be created on the process's real main
+# thread (SDL2's Cocoa backend calls NSApplication.setMainMenu, which
+# raises NSInternalInconsistencyException off-thread). Under WSLg, a
+# pygame window created on a dimOS worker thread likewise comes up blank
+# (WSLg shows a placeholder instead of the rendered frame). Running the
+# window in a background thread of the worker process (as done below for
+# other platforms) therefore fails on macOS and under WSLg, so there we
+# run it in a dedicated child process instead -- that process's own main
+# thread is free for pygame, mirroring how mujoco_connection.py uses
+# `mjpython` for the same reason.
 # The worker process dimOS runs this module in is itself already a
 # daemonic multiprocessing process, and Python forbids daemonic processes
-# from having multiprocessing children — so the window runs as a plain
+# from having multiprocessing children -- so the window runs as a plain
 # `subprocess.Popen` (this module re-invoked with `-m`) instead of a
 # `multiprocessing.Process`, talking back over stdout (JSON lines) and
 # stdin (a "STOP\n" line to ask it to exit).
-_USE_SUBPROCESS_WINDOW = sys.platform == "darwin"
+
+
+def _is_wsl() -> bool:
+    """Return True when running inside Windows Subsystem for Linux.
+
+    Checks `WSL_DISTRO_NAME` first, then falls back to `/proc/version`
+    and the kernel release string (both contain "microsoft"/"wsl" under
+    WSL1/WSL2). Any check failure means "not WSL" so ordinary Linux is
+    unaffected.
+    """
+    if os.environ.get("WSL_DISTRO_NAME"):
+        return True
+    try:
+        with open("/proc/version", "r", encoding="utf-8", errors="ignore") as f:
+            contents = f.read().lower()
+            if "microsoft" in contents or "wsl" in contents:
+                return True
+    except OSError:
+        pass
+    try:
+        import platform
+
+        release = platform.release().lower()
+        if "microsoft" in release or "wsl" in release:
+            return True
+    except Exception:
+        pass
+    return False
+
+
+_USE_SUBPROCESS_WINDOW = sys.platform == "darwin" or _is_wsl()
 _TELEOP_WINDOW_ARGV_FLAG = "--teleop-window-worker"
 
 DEFAULT_LINEAR_SPEED: float = 0.5  # m/s
@@ -90,10 +123,11 @@ def _run_teleop_window(
     slow_multiplier: float,
     disable_movement: bool,
 ) -> None:
-    """Standalone pygame window + control loop, run as a child process on macOS.
+    """Standalone pygame window + control loop, run as a child process on
+    macOS and under WSLg.
 
     Mirrors KeyboardTeleop._pygame_loop / _update_display, but has no access
-    to `self` (it runs in a separate interpreter, invoked via `-m`) — it
+    to `self` (it runs in a separate interpreter, invoked via `-m`) -- it
     writes computed Twist components and events as JSON lines on stdout
     instead of publishing directly, and watches stdin for a "STOP" line
     instead of a shared threading.Event.
@@ -269,7 +303,7 @@ class KeyboardTeleop(Module):
     tools that need to pause for operator confirmation between steps (e.g.
     the one-terminal Go2 benchmark blueprint). Three keys: ``ENTER`` ->
     advance, ``K`` -> skip, ``Backspace`` -> quit. Existing blueprints that
-    don't wire the ``operator_command`` port are unaffected — the events
+    don't wire the ``operator_command`` port are unaffected -- the events
     publish into a stream nobody listens to.
     """
 
@@ -280,7 +314,7 @@ class KeyboardTeleop(Module):
     cmd_vel: Out[Twist]
     operator_command: Out[Int8]
     # Reference-governor corridor half-width (m). Number keys 0-9 map
-    # to 0.0–0.9 m so an operator can dial precision live during a run.
+    # to 0.0-0.9 m so an operator can dial precision live during a run.
     e_max: Out[Float32]
 
     _stop_event: threading.Event
@@ -289,8 +323,9 @@ class KeyboardTeleop(Module):
     _screen: pygame.Surface | None = None
     _clock: pygame.time.Clock | None = None
     _font: pygame.font.Font | None = None
-    # Only used on macOS (_USE_SUBPROCESS_WINDOW): the pygame window runs in
-    # its own process instead of a background thread of this one.
+    # Only used where _USE_SUBPROCESS_WINDOW is set (macOS and WSLg):
+    # the pygame window runs in its own process instead of a background
+    # thread of this one.
     _window_process: subprocess.Popen[str] | None = None
 
     def __init__(
@@ -385,7 +420,7 @@ class KeyboardTeleop(Module):
         super().stop()
 
     def _drain_window_process(self) -> None:
-        """Consume JSON events from the subprocess window (macOS) and publish them.
+        """Consume JSON events from the subprocess window (macOS/WSLg) and publish them.
 
         Mirrors the publish logic in `_pygame_loop`, just fed from
         `_run_teleop_window`'s stdout instead of computing values inline.
@@ -466,7 +501,7 @@ class KeyboardTeleop(Module):
                     elif event.key == pygame.K_BACKSPACE:
                         self.operator_command.publish(Int8(GATE_QUIT))
                     elif pygame.K_0 <= event.key <= pygame.K_9:
-                        # 0 → 0.0 m, 1 → 0.1 m, …, 9 → 0.9 m corridor half-width.
+                        # 0 -> 0.0 m, 1 -> 0.1 m, ..., 9 -> 0.9 m corridor half-width.
                         self.e_max.publish(Float32(data=(event.key - pygame.K_0) * 0.1))
 
                 elif event.type == pygame.KEYUP:
@@ -477,7 +512,7 @@ class KeyboardTeleop(Module):
             twist.linear = Vector3(0, 0, 0)
             twist.angular = Vector3(0, 0, 0)
 
-            # Movement keys (WASD/QE) — guarded by disable_movement so the
+            # Movement keys (WASD/QE) -- guarded by disable_movement so the
             # window can run as a pure e_max slider (0-9 keys stay live in
             # the KEYDOWN handler above).
             if not self.disable_movement:
@@ -611,9 +646,9 @@ def _teleop_window_main(argv: list[str]) -> None:
 
 if __name__ == "__main__":
     # Internal entry point: KeyboardTeleop.start() re-invokes this module
-    # with `-m` on macOS to give the pygame window its own process (and
-    # thus its own real main thread — see _USE_SUBPROCESS_WINDOW above).
-    # Not meant to be run directly otherwise.
+    # with `-m` on macOS/WSLg to give the pygame window its own process
+    # (and thus its own real main thread -- see _USE_SUBPROCESS_WINDOW
+    # above). Not meant to be run directly otherwise.
     if len(sys.argv) >= 2 and sys.argv[1] == _TELEOP_WINDOW_ARGV_FLAG:
         _teleop_window_main(sys.argv[2:])
     else:
