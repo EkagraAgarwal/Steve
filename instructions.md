@@ -53,6 +53,34 @@ Expected output includes `D3D12 (AMD Radeon RX 7700S)` and `Accelerated: yes`. M
 - WSL multicast discovery can fail through WSL NAT even when direct WebRTC works.
 - The working Unitree AES key must be supplied through `UNITREE_AES_128_KEY`. Keep it in secure local storage and never add it to this repository.
 
+### AP mode direct connection
+
+AP mode was tested successfully in this setup at the robot's direct address. Use it for direct control, setup, or recovery when the Go2 is not joined to the router:
+
+- Robot SSID pattern: `dimair05_xxxxxxxx`
+- Robot AP address: `192.168.12.1`
+- Obtain the AP password from secure local storage; never add it to this repository or a command committed to shell history.
+
+Connect Windows to the robot SSID using the normal WiFi UI. The laptop may temporarily lose internet access while attached directly to the Go2. Verify the direct link from Windows and WSL:
+
+```powershell
+ping 192.168.12.1
+```
+
+```bash
+ping -c 10 192.168.12.1
+```
+
+For direct AP operation, set:
+
+```bash
+export ROBOT_IP=192.168.12.1
+```
+
+Despite the installed wrapper naming its connection method `LocalSTA`, the AP path at `192.168.12.1` was observed working in this environment. Revalidate after dimOS, Unitree firmware, or network changes.
+
+To return to WiFi/STA mode, use the correct-region Unitree Go2 app while connected to the AP to provision the robot onto the desired WiFi network. Reconnect the laptop to that same network, find the robot's DHCP address, and use that address as `ROBOT_IP`.
+
 Check the link before hardware use:
 
 ```bash
@@ -114,7 +142,12 @@ pgrep -af dimos
 `pgrep` should print nothing. Then set secrets in the current shell without writing them to the repository:
 
 ```bash
-export ROBOT_IP=192.168.1.101
+# AP mode (verified direct address):
+export ROBOT_IP=192.168.12.1
+
+# Or WiFi/STA mode (observed DHCP address; may change):
+# export ROBOT_IP=192.168.1.101
+
 export UNITREE_AES_128_KEY='<working key from secure storage>'
 ```
 

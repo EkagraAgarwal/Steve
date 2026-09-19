@@ -15,7 +15,7 @@
 
 - dimOS is Python, agent-native, no ROS. Order: replay, then simulation, then real hardware.
 - Quickstart ships `install.sh`; runs: `dimos --replay run unitree-go2`, `dimos --simulation run unitree-go2`, `dimos run unitree-go2` (+ `ROBOT_IP`, verified env name).
-- Go2: stock Pro/Air firmware 1.1.7+, WebRTC, no jailbreak. Ping <10ms before hardware; keep obstacle avoidance enabled.
+- Go2: stock Pro/Air firmware 1.1.7+, WebRTC, no jailbreak. AP mode was tested at `192.168.12.1`; WiFi/STA used DHCP `192.168.1.101` in this setup and may change. Ping <10ms before hardware; keep obstacle avoidance enabled. Never commit AP/WiFi passwords or AES keys.
 - Incoming `dimos/` file in this repo is a patch/reference for teleop semantics, not the installed `/home/ekagr/dimos` checkout unless explicitly copied/upstreamed.
 - WSLg pygame must use the patch's subprocess path (`_is_wsl`); the old installed worker-thread implementation opens a blank `[WARN:COPY MODE]` window. Copy only `dimos/robot/unitree/keyboard_teleop.py` into `/home/ekagr/dimos` when explicitly updating the local install, then compile it. Run hardware teleop in one foreground terminal only; detached/duplicate coordinators can hide the window. Current `GO2Connection` auto-stands on start and calls `liedown()` on stop. Full commands and recovery: `instructions.md`.
 

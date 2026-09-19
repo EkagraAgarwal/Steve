@@ -98,7 +98,7 @@ Pure stdlib tests with a fake JEV client: no network, no key, no hardware.
 
 ## Go2 operations
 
-See `instructions.md` for WSL GPU setup, WiFi/STA and AES handling, installing the WSLg teleop patch, simulation, foreground hardware WASD, automatic stand/lie-down behavior, and duplicate-coordinator recovery. Never commit robot or WiFi secrets.
+See `instructions.md` for WSL GPU setup, verified direct AP mode (`192.168.12.1`), WiFi/STA and AES handling, installing the WSLg teleop patch, simulation, foreground hardware WASD, automatic stand/lie-down behavior, and duplicate-coordinator recovery. Never commit robot or WiFi secrets.
 
 ## Environment
 
