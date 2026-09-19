@@ -6,25 +6,6 @@ MuJoCo, driven by a WASD keyboard window. No physical robot needed.
 
 Verified on: macOS (Apple Silicon), Python 3.12, dev checkout.
 
-## 0. Required branch (read this first)
-
-Keyboard teleop on macOS needs a fix that **is not on `main` yet**:
-
-- Branch: `fix/keyboard-teleop-macos-main-thread`
-- Commit: `b5265d623` — "fix(robot): run KeyboardTeleop's pygame window in its own process on macOS"
-
-Without it, `KeyboardTeleop` crashes on startup on macOS (SDL/Cocoa requires
-the window to be created on the process's real main thread; the pygame
-window ran on a background thread and macOS raises
-`NSInternalInconsistencyException`). The fix runs the teleop window as its
-own child process on `darwin`, mirroring how `mujoco_connection.py` already
-uses `mjpython` for the same reason. Linux is unaffected either way.
-
-**This branch currently only exists locally — it hasn't been pushed to a
-remote yet.** Until it is (or is merged to `main`), get the commit to your
-teammate directly (push the branch, open a PR, or share the diff) before
-they follow the steps below — cloning fresh from `main` will hit the crash.
-
 ## 1. Prerequisites
 
 - macOS 14+ (Apple Silicon)
