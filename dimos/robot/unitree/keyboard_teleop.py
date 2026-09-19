@@ -13,10 +13,19 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import json
 import os
+import subprocess
 import sys
 import threading
 from typing import Any
+
+# Must be set before `import pygame`: otherwise pygame prints a "Hello from
+# the pygame community" banner to stdout on import. On macOS the teleop
+# window runs as a child process whose stdout is a JSON event stream read
+# by the parent (see _USE_SUBPROCESS_WINDOW below) — that banner would land
+# in the stream as a non-JSON line.
+os.environ.setdefault("PYGAME_HIDE_SUPPORT_PROMPT", "1")
 
 import pygame
 
@@ -43,6 +52,22 @@ logger = setup_logger()
 if sys.platform.startswith("linux"):
     os.environ["SDL_VIDEODRIVER"] = "x11"
 
+# macOS requires Cocoa windows to be created on the process's real main thread
+# (SDL2's Cocoa backend calls NSApplication.setMainMenu, which raises
+# NSInternalInconsistencyException off-thread). Running the window in a
+# background thread of the worker process (as done below for other
+# platforms) crashes on macOS, so there we run it in a dedicated child
+# process instead — that process's own main thread is free for pygame,
+# mirroring how mujoco_connection.py uses `mjpython` for the same reason.
+# The worker process dimOS runs this module in is itself already a
+# daemonic multiprocessing process, and Python forbids daemonic processes
+# from having multiprocessing children — so the window runs as a plain
+# `subprocess.Popen` (this module re-invoked with `-m`) instead of a
+# `multiprocessing.Process`, talking back over stdout (JSON lines) and
+# stdin (a "STOP\n" line to ask it to exit).
+_USE_SUBPROCESS_WINDOW = sys.platform == "darwin"
+_TELEOP_WINDOW_ARGV_FLAG = "--teleop-window-worker"
+
 DEFAULT_LINEAR_SPEED: float = 0.5  # m/s
 DEFAULT_ANGULAR_SPEED: float = 0.8  # rad/s
 DEFAULT_BOOST_MULTIPLIER: float = 2.0
@@ -55,6 +80,186 @@ _CONTROL_RATE_HZ = 50
 _BACKGROUND_COLOR = (30, 30, 30)
 _HELP_TEXT_COLOR = (150, 150, 150)
 _INDICATOR_RADIUS = 15
+
+
+def _run_teleop_window(
+    window_title: str,
+    linear_speed: float,
+    angular_speed: float,
+    boost_multiplier: float,
+    slow_multiplier: float,
+    disable_movement: bool,
+) -> None:
+    """Standalone pygame window + control loop, run as a child process on macOS.
+
+    Mirrors KeyboardTeleop._pygame_loop / _update_display, but has no access
+    to `self` (it runs in a separate interpreter, invoked via `-m`) — it
+    writes computed Twist components and events as JSON lines on stdout
+    instead of publishing directly, and watches stdin for a "STOP" line
+    instead of a shared threading.Event.
+    """
+    keys_held: set[int] = set()
+    stop_requested = threading.Event()
+
+    def _watch_stdin() -> None:
+        for line in sys.stdin:
+            if line.strip() == "STOP":
+                stop_requested.set()
+                return
+        # Parent died / closed stdin without an explicit STOP.
+        stop_requested.set()
+
+    threading.Thread(target=_watch_stdin, daemon=True).start()
+
+    def _emit(kind: str, payload: Any) -> None:
+        print(json.dumps([kind, payload]), flush=True)
+
+    pygame.init()
+    screen = pygame.display.set_mode((_WINDOW_WIDTH, _WINDOW_HEIGHT), pygame.SWSURFACE)
+    pygame.display.set_caption(window_title)
+    clock = pygame.time.Clock()
+    font = pygame.font.Font(None, _FONT_SIZE)
+
+    while not stop_requested.is_set():
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                stop_requested.set()
+            elif event.type == pygame.KEYDOWN:
+                keys_held.add(event.key)
+
+                if event.key == pygame.K_SPACE:
+                    keys_held.clear()
+                    _emit("estop", None)
+                elif event.key == pygame.K_ESCAPE:
+                    stop_requested.set()
+                elif event.key == pygame.K_RETURN:
+                    _emit("operator", GATE_ADVANCE)
+                elif event.key == pygame.K_k:
+                    _emit("operator", GATE_SKIP)
+                elif event.key == pygame.K_BACKSPACE:
+                    _emit("operator", GATE_QUIT)
+                elif pygame.K_0 <= event.key <= pygame.K_9:
+                    _emit("e_max", (event.key - pygame.K_0) * 0.1)
+
+            elif event.type == pygame.KEYUP:
+                keys_held.discard(event.key)
+
+        lx, ly, az = 0.0, 0.0, 0.0
+
+        if not disable_movement:
+            if pygame.K_w in keys_held:
+                lx = linear_speed
+            if pygame.K_s in keys_held:
+                lx = -linear_speed
+
+            if pygame.K_q in keys_held:
+                ly = linear_speed
+            if pygame.K_e in keys_held:
+                ly = -linear_speed
+
+            if pygame.K_a in keys_held:
+                az = angular_speed
+            if pygame.K_d in keys_held:
+                az = -angular_speed
+
+        speed_multiplier = 1.0
+        if pygame.K_LSHIFT in keys_held or pygame.K_RSHIFT in keys_held:
+            speed_multiplier = boost_multiplier
+        elif pygame.K_LCTRL in keys_held or pygame.K_RCTRL in keys_held:
+            speed_multiplier = slow_multiplier
+
+        lx *= speed_multiplier
+        ly *= speed_multiplier
+        az *= speed_multiplier
+
+        active = lx != 0 or ly != 0 or az != 0
+        _emit("cmd_vel", [lx, ly, az, active])
+
+        _render_teleop_window(
+            screen,
+            font,
+            keys_held,
+            window_title,
+            boost_multiplier,
+            slow_multiplier,
+            disable_movement,
+            lx,
+            ly,
+            az,
+        )
+
+        clock.tick(_CONTROL_RATE_HZ)
+
+    pygame.quit()
+    _emit("quit", None)
+
+
+def _render_teleop_window(
+    screen: pygame.Surface,
+    font: pygame.font.Font,
+    keys_held: set[int],
+    window_title: str,
+    boost_multiplier: float,
+    slow_multiplier: float,
+    disable_movement: bool,
+    lx: float,
+    ly: float,
+    az: float,
+) -> None:
+    screen.fill(_BACKGROUND_COLOR)
+
+    y_pos = 20
+
+    speed_mult_text = ""
+    if pygame.K_LSHIFT in keys_held or pygame.K_RSHIFT in keys_held:
+        speed_mult_text = f" [BOOST {boost_multiplier:g}x]"
+    elif pygame.K_LCTRL in keys_held or pygame.K_RCTRL in keys_held:
+        speed_mult_text = f" [SLOW {slow_multiplier:g}x]"
+
+    texts = [
+        window_title + speed_mult_text,
+        "",
+        f"Linear X (Forward/Back): {lx:+.2f} m/s",
+        f"Linear Y (Strafe L/R): {ly:+.2f} m/s",
+        f"Angular Z (Turn L/R): {az:+.2f} rad/s",
+        "",
+        "Keys: " + ", ".join([pygame.key.name(k).upper() for k in keys_held if k < 256]),
+    ]
+
+    for i, text in enumerate(texts):
+        if text:
+            color = (0, 255, 255) if i == 0 else (255, 255, 255)
+            surf = font.render(text, True, color)
+            screen.blit(surf, (20, y_pos))
+        y_pos += 30
+
+    if lx != 0 or ly != 0 or az != 0:
+        pygame.draw.circle(screen, (255, 0, 0), (450, 30), _INDICATOR_RADIUS)
+    else:
+        pygame.draw.circle(screen, (0, 255, 0), (450, 30), _INDICATOR_RADIUS)
+
+    y_pos = 280
+    if disable_movement:
+        help_texts = [
+            "Movement disabled (e_max slider mode)",
+            "Space: E-Stop | ESC: Quit",
+            "Enter: Advance | K: Skip | Backspace: Quit (tools)",
+            "0-9: e_max corridor (0.0-0.9 m, for RG)",
+        ]
+    else:
+        help_texts = [
+            "WS: Move | AD: Turn | QE: Strafe",
+            "Shift: Boost | Ctrl: Slow",
+            "Space: E-Stop | ESC: Quit",
+            "Enter: Advance | K: Skip | Backspace: Quit (tools)",
+            "0-9: e_max corridor (0.0-0.9 m, for RG)",
+        ]
+    for text in help_texts:
+        surf = font.render(text, True, _HELP_TEXT_COLOR)
+        screen.blit(surf, (20, y_pos))
+        y_pos += 25
+
+    pygame.display.flip()
 
 
 class KeyboardTeleop(Module):
@@ -84,6 +289,9 @@ class KeyboardTeleop(Module):
     _screen: pygame.Surface | None = None
     _clock: pygame.time.Clock | None = None
     _font: pygame.font.Font | None = None
+    # Only used on macOS (_USE_SUBPROCESS_WINDOW): the pygame window runs in
+    # its own process instead of a background thread of this one.
+    _window_process: subprocess.Popen[str] | None = None
 
     def __init__(
         self,
@@ -123,7 +331,28 @@ class KeyboardTeleop(Module):
         self._keys_held = set()
         self._stop_event.clear()
 
-        self._thread = threading.Thread(target=self._pygame_loop, daemon=True)
+        if _USE_SUBPROCESS_WINDOW:
+            self._window_process = subprocess.Popen(
+                [
+                    sys.executable,
+                    "-m",
+                    "dimos.robot.unitree.keyboard_teleop",
+                    _TELEOP_WINDOW_ARGV_FLAG,
+                    self._window_title,
+                    str(self.linear_speed),
+                    str(self.angular_speed),
+                    str(self.boost_multiplier),
+                    str(self.slow_multiplier),
+                    "1" if self.disable_movement else "0",
+                ],
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                text=True,
+                bufsize=1,
+            )
+            self._thread = threading.Thread(target=self._drain_window_process, daemon=True)
+        else:
+            self._thread = threading.Thread(target=self._pygame_loop, daemon=True)
         self._thread.start()
 
     @rpc
@@ -135,11 +364,72 @@ class KeyboardTeleop(Module):
 
         self._stop_event.set()
 
+        if _USE_SUBPROCESS_WINDOW and self._window_process is not None:
+            try:
+                if self._window_process.stdin is not None:
+                    self._window_process.stdin.write("STOP\n")
+                    self._window_process.stdin.flush()
+            except (BrokenPipeError, OSError):
+                pass  # Child already exited.
+
         if self._thread is None:
             raise RuntimeError("Cannot stop: thread was never started")
         self._thread.join(DEFAULT_THREAD_JOIN_TIMEOUT)
 
+        if _USE_SUBPROCESS_WINDOW and self._window_process is not None:
+            try:
+                self._window_process.wait(timeout=DEFAULT_THREAD_JOIN_TIMEOUT)
+            except subprocess.TimeoutExpired:
+                self._window_process.terminate()
+
         super().stop()
+
+    def _drain_window_process(self) -> None:
+        """Consume JSON events from the subprocess window (macOS) and publish them.
+
+        Mirrors the publish logic in `_pygame_loop`, just fed from
+        `_run_teleop_window`'s stdout instead of computing values inline.
+        """
+        if self._window_process is None or self._window_process.stdout is None:
+            raise RuntimeError("_window_process not initialized")
+
+        for line in self._window_process.stdout:
+            if self._stop_event.is_set():
+                break
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                kind, payload = json.loads(line)
+            except (json.JSONDecodeError, ValueError):
+                # Stray non-JSON output on the child's stdout (a library
+                # print, a warning); not an event for us.
+                logger.debug("Ignoring non-JSON line from teleop window: %r", line)
+                continue
+
+            if kind == "cmd_vel":
+                lx, ly, az, active = payload
+                twist = Twist()
+                twist.linear = Vector3(lx, ly, 0)
+                twist.angular = Vector3(0, 0, az)
+                if self.publish_only_when_active:
+                    if active or self._was_active:
+                        self.cmd_vel.publish(twist)
+                    self._was_active = active
+                else:
+                    self.cmd_vel.publish(twist)
+            elif kind == "estop":
+                stop_twist = Twist()
+                stop_twist.linear = Vector3(0, 0, 0)
+                stop_twist.angular = Vector3(0, 0, 0)
+                self.cmd_vel.publish(stop_twist)
+                logger.warning("EMERGENCY STOP!")
+            elif kind == "operator":
+                self.operator_command.publish(Int8(payload))
+            elif kind == "e_max":
+                self.e_max.publish(Float32(data=payload))
+            elif kind == "quit":
+                break
 
     def _pygame_loop(self) -> None:
         if self._keys_held is None:
@@ -299,3 +589,35 @@ class KeyboardTeleop(Module):
             y_pos += 25
 
         pygame.display.flip()
+
+
+def _teleop_window_main(argv: list[str]) -> None:
+    if len(argv) != 6:
+        raise SystemExit(
+            f"usage: -m dimos.robot.unitree.keyboard_teleop {_TELEOP_WINDOW_ARGV_FLAG} "
+            "<title> <linear_speed> <angular_speed> <boost_multiplier> "
+            "<slow_multiplier> <disable_movement:0|1>"
+        )
+    window_title, linear_speed, angular_speed, boost_multiplier, slow_multiplier, disable_movement = argv
+    _run_teleop_window(
+        window_title,
+        float(linear_speed),
+        float(angular_speed),
+        float(boost_multiplier),
+        float(slow_multiplier),
+        disable_movement == "1",
+    )
+
+
+if __name__ == "__main__":
+    # Internal entry point: KeyboardTeleop.start() re-invokes this module
+    # with `-m` on macOS to give the pygame window its own process (and
+    # thus its own real main thread — see _USE_SUBPROCESS_WINDOW above).
+    # Not meant to be run directly otherwise.
+    if len(sys.argv) >= 2 and sys.argv[1] == _TELEOP_WINDOW_ARGV_FLAG:
+        _teleop_window_main(sys.argv[2:])
+    else:
+        raise SystemExit(
+            "This module is a dimOS Module (KeyboardTeleop); it isn't meant to be "
+            "run directly except as the internal teleop-window worker process."
+        )
