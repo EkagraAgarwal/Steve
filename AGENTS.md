@@ -2,6 +2,7 @@
 
 - Project: HackMIT build targeting Dimensional OS (dimOS) on Unitree Go2; speech via ElevenLabs, low-latency typed routing via TypeSafe AI JEV.
 - Repo state: no source, manifests, scripts, or CI exist yet. Do not invent repo commands; update this file once manifests land.
+- Priority: Phase 1 is JEV text-to-typed-command routing first; ElevenLabs/microphone voice integration comes later.
 - Keep repo text ASCII unless an existing file clearly requires Unicode.
 
 ## Target pipeline (planned)
