@@ -224,6 +224,9 @@ agents = [
     "openai",
     "sounddevice",
     "faster-whisper>=1.0.0",
+
+    # Fast System One judgments (Jev) for low-latency text command routing
+    "typesafe-sdk>=0.5,<1",
 ]
 
 web = [
