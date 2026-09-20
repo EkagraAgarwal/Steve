@@ -14,4 +14,4 @@ dependencies = ["typesafe-sdk"]
 steve-route = "steve_router.cli:main"
 
 [tool.setuptools.packages.find]
-include = ["steve_router*"]
+include = ["steve_router*", "dogbrain*"]
