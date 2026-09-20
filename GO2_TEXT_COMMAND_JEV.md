@@ -11,14 +11,13 @@ In standard DimOS agentic blueprints (such as `unitree-go2-agentic`), natural la
 `JevMovementTeleop` solves this by introducing a fast **System 1 reflex path**:
 - It uses TypeSafe's Jev (`typesafe-sdk`) to evaluate incoming text commands via high-speed classification rather than autoregressive reasoning.
 - Simple directional instructions are parsed, converted into relative goal poses, and dispatched directly to the robot's navigation stack in **under a second**.
-- If a command is complex, ambiguous, or classified as `"other"`, Jev steps aside, allowing a co-running LLM (`McpClient`) to handle the instruction as a fallback.
+- Complex, ambiguous, or rejected commands must not execute. Use the pure-JEV blueprint; a shared input topic does not provide arbitration with an LLM subscriber.
 
 ```mermaid
 flowchart TD
     User(["dimos humancli / text input"]) --> Topic["LCM Topic: /human_input"]
     
     Topic --> Jev["JevMovementTeleop (System 1)"]
-    Topic -.->|Fallback if 'other'| Agent["McpClient / LLM Agent (System 2)"]
     
     Jev -->|Direct Choice Evaluation| TypeSafe["TypeSafe API (Jev)"]
     TypeSafe -->|Action + Confidence| Jev
@@ -78,10 +77,10 @@ export TYPESAFE_API_KEY="your-typesafe-api-key"
 ```
 
 ### 4.2 Install Dependencies
-Ensure `typesafe-sdk` is installed (it is declared under `agents` in `pyproject.toml`):
+Install this repository's routing package in the environment running the integration:
 
 ```bash
-uv pip install "typesafe-sdk>=0.5,<1"
+python -m pip install -e .
 ```
 
 ---
@@ -121,9 +120,48 @@ Type commands directly into the prompt:
 
 ---
 
-## 6. How Fallback Handling Works
+## 6. Execution Isolation
 
-When running alongside an LLM agent:
-1. When you enter a command, both `JevMovementTeleop` and `McpClient` receive the string via `/human_input`.
-2. If Jev identifies a directional action with confidence $\ge 0.6$, it executes the move immediately and publishes an acknowledgment (e.g. `Forward (1m).`).
-3. If the command is not a simple directional instruction (e.g., *"What do you see?"*, *"Where is the kitchen?"*), Jev outputs `action: other` and silently yields execution to the LLM agent.
+Run the pure-JEV blueprint for voice commands. Do not attach a second movement-capable LLM subscriber to `/human_input`: both subscribers would receive the same command, and a JEV acknowledgment does not suppress the other subscriber. There is no implemented fallback arbitration.
+
+Navigation goal cancellation is not a verified physical emergency stop. Keep an independent local stop available. Validate dry-run, replay, and simulation before any hardware use.
+
+## 7. Deepgram Voice Setup
+
+Use a project virtual environment to avoid changing packages used by other applications. In PowerShell:
+
+```powershell
+python -m venv .venv
+.\.venv\Scripts\python -m pip install -e ".[voice]"
+```
+
+On Linux/WSL:
+
+```bash
+python -m venv .venv
+.venv/bin/python -m pip install -e ".[voice]"
+```
+
+Set `DEEPGRAM_API_KEY` in your process environment. Set `TYPESAFE_API_KEY` as well when enabling JEV routing. `.env.example` is a template only; the voice CLI does not automatically load `.env`. Do not put credentials in source files or committed shell scripts.
+
+The voice path uses Deepgram Flux, PCM16 mono audio at 16 kHz, and finalized turns only. No speech output or conversational LLM is involved. Default operation is dry-run; partial transcripts must never become movement commands.
+
+From the activated project environment:
+
+```bash
+steve-voice --help
+steve-voice
+steve-voice --route
+```
+
+The console uses Enter to start recording and Enter again to release; this is a toggle, not a physical hold-to-talk button. The default command prints the finalized transcript. `--route` additionally sends it to JEV and prints a validated decision; it does not send movement to dimOS. Neither command is a robot emergency stop. Microphone capture transmits audio to Deepgram only when deliberately started.
+
+Offline verification requires no microphone, API credentials, or robot:
+
+```bash
+python -m unittest discover -s tests -v
+```
+
+WSLg microphone input depends on the host audio configuration. Probe available devices before assuming it works; use native Windows capture if WSLg input is unavailable. Linux capture may require the system PortAudio package.
+
+This repository contains dimOS patch files, not a complete dimOS installation. Installing this Python package does not copy patches into `/home/ekagr/dimos`, register blueprints there, or enable hardware control.
